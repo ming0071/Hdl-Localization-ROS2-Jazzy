@@ -53,7 +53,6 @@ pclomp::NormalDistributionsTransform<PointSource, PointTarget>::NormalDistributi
   , gauss_d2_ ()
   , gauss_d3_ ()
   , trans_probability_ ()
-  , regularization_pose_ (boost::none)
   , j_ang_a_ (), j_ang_b_ (), j_ang_c_ (), j_ang_d_ (), j_ang_e_ (), j_ang_f_ (), j_ang_g_ (), j_ang_h_ ()
   , h_ang_a2_ (), h_ang_a3_ (), h_ang_b2_ (), h_ang_b3_ (), h_ang_c2_ (), h_ang_c3_ (), h_ang_d1_ (), h_ang_d2_ ()
   , h_ang_d3_ (), h_ang_e1_ (), h_ang_e2_ (), h_ang_e3_ (), h_ang_f1_ (), h_ang_f2_ (), h_ang_f3_ ()
@@ -103,8 +102,6 @@ pclomp::NormalDistributionsTransform<PointSource, PointTarget>::computeTransform
 
   Eigen::Transform<float, 3, Eigen::Affine, Eigen::ColMajor> eig_transformation;
   eig_transformation.matrix () = final_transformation_;
-  transformation_array_.clear();
-  transformation_array_.push_back(final_transformation_);
 
   // Convert initial guess matrix to 6 element transformation vector
   Eigen::Matrix<double, 6, 1> p, delta_p, score_gradient;
@@ -117,13 +114,6 @@ pclomp::NormalDistributionsTransform<PointSource, PointTarget>::computeTransform
 
   double score = 0;
   double delta_p_norm;
-
-  if (regularization_pose_)
-  {
-    Eigen::Transform<float, 3, Eigen::Affine, Eigen::ColMajor> regularization_pose_transformation;
-    regularization_pose_transformation.matrix() = regularization_pose_.get();
-    regularization_pose_translation_ = regularization_pose_transformation.translation();
-  }
 
   // Calculate derivatives of initial transform vector, subsequent derivative calculations are done in the step length determination.
   score = computeDerivatives (score_gradient, hessian, output, p);
@@ -143,13 +133,7 @@ pclomp::NormalDistributionsTransform<PointSource, PointTarget>::computeTransform
 
     if (delta_p_norm == 0 || delta_p_norm != delta_p_norm)
     {
-      if (input_->points.empty()) {
-        trans_probability_ = 0.0f;
-      }
-      else {
-        trans_probability_ = score / static_cast<double> (input_->points.size ());
-      }
-
+      trans_probability_ = score / static_cast<double> (input_->points.size ());
       converged_ = delta_p_norm == delta_p_norm;
       return;
     }
@@ -164,7 +148,6 @@ pclomp::NormalDistributionsTransform<PointSource, PointTarget>::computeTransform
                        Eigen::AngleAxis<float> (static_cast<float> (delta_p (4)), Eigen::Vector3f::UnitY ()) *
                        Eigen::AngleAxis<float> (static_cast<float> (delta_p (5)), Eigen::Vector3f::UnitZ ())).matrix ();
 
-    transformation_array_.push_back(final_transformation_);
 
     p = p + delta_p;
 
@@ -184,14 +167,7 @@ pclomp::NormalDistributionsTransform<PointSource, PointTarget>::computeTransform
 
   // Store transformation probability. The relative differences within each scan registration are accurate
   // but the normalization constants need to be modified for it to be globally accurate
-  if (input_->points.empty()) {
-    trans_probability_ = 0.0f;
-  }
-  else {
-    trans_probability_ = score / static_cast<double> (input_->points.size ());
-  }
-
-  hessian_ = hessian;
+  trans_probability_ = score / static_cast<double> (input_->points.size ());
 }
 
 #ifndef _OPENMP
@@ -210,23 +186,14 @@ pclomp::NormalDistributionsTransform<PointSource, PointTarget>::computeDerivativ
 	score_gradient.setZero();
 	hessian.setZero();
 	double score = 0;
-	int total_neighborhood_count = 0;
-  double nearest_voxel_score = 0;
-  size_t found_neigborhood_voxel_num = 0;
 
   std::vector<double> scores(input_->points.size());
-  std::vector<double> nearest_voxel_scores(input_->points.size());
-  std::vector<size_t> found_neigborhood_voxel_nums(input_->points.size());
   std::vector<Eigen::Matrix<double, 6, 1>, Eigen::aligned_allocator<Eigen::Matrix<double, 6, 1>>> score_gradients(input_->points.size());
   std::vector<Eigen::Matrix<double, 6, 6>, Eigen::aligned_allocator<Eigen::Matrix<double, 6, 6>>> hessians(input_->points.size());
-  std::vector<int> neighborhood_counts(input_->points.size());
   for (std::size_t i = 0; i < input_->points.size(); i++) {
 		scores[i] = 0;
-    nearest_voxel_scores[i] = 0;
-    found_neigborhood_voxel_nums[i] = 0;
 		score_gradients[i].setZero();
 		hessians[i].setZero();
-		neighborhood_counts[i] = 0;
 	}
 
 	// Precompute Angular Derivatives (eq. 6.19 and 6.21)[Magnusson 2009]
@@ -279,11 +246,9 @@ pclomp::NormalDistributionsTransform<PointSource, PointTarget>::computeDerivativ
 			break;
 		}
 
-		double sum_score_pt = 0;
-    double nearest_voxel_score_pt = 0;
+		double score_pt = 0;
 		Eigen::Matrix<double, 6, 1> score_gradient_pt = Eigen::Matrix<double, 6, 1>::Zero();
 		Eigen::Matrix<double, 6, 6> hessian_pt = Eigen::Matrix<double, 6, 6>::Zero();
-		int neighborhood_count = 0;
 
 		for (typename std::vector<TargetGridLeafConstPtr>::iterator neighborhood_it = neighborhood.begin(); neighborhood_it != neighborhood.end(); neighborhood_it++)
 		{
@@ -301,68 +266,20 @@ pclomp::NormalDistributionsTransform<PointSource, PointTarget>::computeDerivativ
 			// Compute derivative of transform function w.r.t. transform vector, J_E and H_E in Equations 6.18 and 6.20 [Magnusson 2009]
 			computePointDerivatives(x, point_gradient_, point_hessian_);
 			// Update score, gradient and hessian, lines 19-21 in Algorithm 2, according to Equations 6.10, 6.12 and 6.13, respectively [Magnusson 2009]
-			double score_pt = updateDerivatives(score_gradient_pt, hessian_pt, point_gradient_, point_hessian_, x_trans, c_inv, compute_hessian);
-			neighborhood_count++;
-      sum_score_pt += score_pt;
-      if (score_pt > nearest_voxel_score_pt) {
-        nearest_voxel_score_pt = score_pt;
-      }
+			score_pt += updateDerivatives(score_gradient_pt, hessian_pt, point_gradient_, point_hessian_, x_trans, c_inv, compute_hessian);
 		}
 
-    if(!neighborhood.empty()) {
-      ++found_neigborhood_voxel_nums[idx];
-    }
-
-		scores[idx] = sum_score_pt;
-    nearest_voxel_scores[idx] = nearest_voxel_score_pt;
+		scores[idx] = score_pt;
 		score_gradients[idx].noalias() = score_gradient_pt;
 		hessians[idx].noalias() = hessian_pt;
-		neighborhood_counts[idx] += neighborhood_count;
 	}
 
   // Ensure that the result is invariant against the summing up order
   for (std::size_t i = 0; i < input_->points.size(); i++) {
 		score += scores[i];
-    nearest_voxel_score += nearest_voxel_scores[i];
-    found_neigborhood_voxel_num += found_neigborhood_voxel_nums[i];
 		score_gradient += score_gradients[i];
 		hessian += hessians[i];
-		total_neighborhood_count += neighborhood_counts[i];
 	}
-
-	if (regularization_pose_) {
-		float regularization_score = 0.0f;
-		Eigen::Matrix<double, 6, 1> regularization_gradient = Eigen::Matrix<double, 6, 1>::Zero();
-		Eigen::Matrix<double, 6, 6> regularization_hessian = Eigen::Matrix<double, 6, 6>::Zero();
-
-		const float dx = regularization_pose_translation_(0) - static_cast<float>(p(0, 0));
-		const float dy = regularization_pose_translation_(1) - static_cast<float>(p(1, 0));
-		const auto sin_yaw = static_cast<float>(sin(p(5, 0)));
-		const auto cos_yaw = static_cast<float>(cos(p(5, 0)));
-		const float longitudinal_distance = dy * sin_yaw + dx * cos_yaw;
-		const auto neighborhood_count_weight = static_cast<float>(total_neighborhood_count);
-
-		regularization_score = - regularization_scale_factor_ * neighborhood_count_weight * longitudinal_distance * longitudinal_distance;
-
-		regularization_gradient(0, 0) = regularization_scale_factor_ * neighborhood_count_weight * 2.0f * cos_yaw * longitudinal_distance;
-		regularization_gradient(1, 0) = regularization_scale_factor_ * neighborhood_count_weight * 2.0f * sin_yaw * longitudinal_distance;
-
-		regularization_hessian(0, 0) = - regularization_scale_factor_ * neighborhood_count_weight * 2.0f * cos_yaw * cos_yaw;
-		regularization_hessian(0, 1) = - regularization_scale_factor_ * neighborhood_count_weight * 2.0f * cos_yaw * sin_yaw;
-		regularization_hessian(1, 1) = - regularization_scale_factor_ * neighborhood_count_weight * 2.0f * sin_yaw * sin_yaw;
-		regularization_hessian(1, 0) = regularization_hessian(0, 1);
-
-		score += regularization_score;
-		score_gradient += regularization_gradient;
-		hessian += regularization_hessian;
-	}
-
-  if (found_neigborhood_voxel_num != 0) {
-    nearest_voxel_transformation_likelihood_ = nearest_voxel_score / static_cast<double>(found_neigborhood_voxel_num);
-  }
-  else {
-    nearest_voxel_transformation_likelihood_ = 0.0;
-  }
 
 	return (score);
 }
@@ -437,10 +354,11 @@ pclomp::NormalDistributionsTransform<PointSource, PointTarget>::computeAngleDeri
 		h_ang_b2_ << (cx * cy * cz), (-cx * cy * sz), (cx * sy);
 		h_ang_b3_ << (sx * cy * cz), (-sx * cy * sz), (sx * sy);
 
+		// The sign of 'sx * sz' in c2 is incorrect in [Magnusson 2009], and it is fixed here.
 		h_ang_c2_ << (-sx * cz - cx * sy * sz), (sx * sz - cx * sy * cz), 0;
 		h_ang_c3_ << (cx * cz - sx * sy * sz), (-sx * sy * cz - cx * sz), 0;
 
-		h_ang_d1_ << (-cy * cz), (cy * sz), (sy);
+		h_ang_d1_ << (-cy * cz), (cy * sz), (-sy);
 		h_ang_d2_ << (-sx * sy * cz), (sx * sy * sz), (sx * cy);
 		h_ang_d3_ << (cx * sy * cz), (-cx * sy * sz), (-cx * cy);
 
@@ -918,100 +836,91 @@ pclomp::NormalDistributionsTransform<PointSource, PointTarget>::computeStepLengt
   // initial step suggestion and recalculation the reusable portions of the hessian would intail more computation time.
   score = computeDerivatives (score_gradient, hessian, trans_cloud, x_t, true);
 
-  // --------------------------------------------------------------------------------------------------------------------------------
-  // FIXME(YamatoAndo):
-  // Currently, using LineSearch causes the following problems:
-  // It may converge to a local solution.
-  // There are cases where a loop process is executed without changing the variable values, resulting in unnecessary processing time.
-  // As better convergence results are obtained without using LineSearch, we have decided to disable this feature.
-  // If you have any suggestions on how to solve these issues, we would appreciate it if you could contribute.
-  // --------------------------------------------------------------------------------------------------------------------------------
+  // Calculate phi(alpha_t)
+  double phi_t = -score;
+  // Calculate phi'(alpha_t)
+  double d_phi_t = -(score_gradient.dot (step_dir));
 
-  // // Calculate phi(alpha_t)
-  // double phi_t = -score;
-  // // Calculate phi'(alpha_t)
-  // double d_phi_t = -(score_gradient.dot (step_dir));
+  // Calculate psi(alpha_t)
+  double psi_t = auxiliaryFunction_PsiMT (a_t, phi_t, phi_0, d_phi_0, mu);
+  // Calculate psi'(alpha_t)
+  double d_psi_t = auxiliaryFunction_dPsiMT (d_phi_t, d_phi_0, mu);
 
-  // // Calculate psi(alpha_t)
-  // double psi_t = auxiliaryFunction_PsiMT (a_t, phi_t, phi_0, d_phi_0, mu);
-  // // Calculate psi'(alpha_t)
-  // double d_psi_t = auxiliaryFunction_dPsiMT (d_phi_t, d_phi_0, mu);
+  // Iterate until max number of iterations, interval convergence or a value satisfies the sufficient decrease, Equation 1.1, and curvature condition, Equation 1.2 [More, Thuente 1994]
+  while (!interval_converged && step_iterations < max_step_iterations && !(psi_t <= 0 /*Sufficient Decrease*/ && d_phi_t <= -nu * d_phi_0 /*Curvature Condition*/))
+  {
+    // Use auxiliary function if interval I is not closed
+    if (open_interval)
+    {
+      a_t = trialValueSelectionMT (a_l, f_l, g_l,
+                                   a_u, f_u, g_u,
+                                   a_t, psi_t, d_psi_t);
+    }
+    else
+    {
+      a_t = trialValueSelectionMT (a_l, f_l, g_l,
+                                   a_u, f_u, g_u,
+                                   a_t, phi_t, d_phi_t);
+    }
 
-  // // Iterate until max number of iterations, interval convergence or a value satisfies the sufficient decrease, Equation 1.1, and curvature condition, Equation 1.2 [More, Thuente 1994]
-  // while (!interval_converged && step_iterations < max_step_iterations && !(psi_t <= 0 /*Sufficient Decrease*/ && d_phi_t <= -nu * d_phi_0 /*Curvature Condition*/))
-  // {
-  //   // Use auxiliary function if interval I is not closed
-  //   if (open_interval)
-  //   {
-  //     a_t = trialValueSelectionMT (a_l, f_l, g_l,
-  //                                  a_u, f_u, g_u,
-  //                                  a_t, psi_t, d_psi_t);
-  //   }
-  //   else
-  //   {
-  //     a_t = trialValueSelectionMT (a_l, f_l, g_l,
-  //                                  a_u, f_u, g_u,
-  //                                  a_t, phi_t, d_phi_t);
-  //   }
+    a_t = std::min (a_t, step_max);
+    a_t = std::max (a_t, step_min);
 
-  //   a_t = std::min (a_t, step_max);
-  //   a_t = std::max (a_t, step_min);
+    x_t = x + step_dir * a_t;
 
-  //   x_t = x + step_dir * a_t;
+    final_transformation_ = (Eigen::Translation<float, 3> (static_cast<float> (x_t (0)), static_cast<float> (x_t (1)), static_cast<float> (x_t (2))) *
+                             Eigen::AngleAxis<float> (static_cast<float> (x_t (3)), Eigen::Vector3f::UnitX ()) *
+                             Eigen::AngleAxis<float> (static_cast<float> (x_t (4)), Eigen::Vector3f::UnitY ()) *
+                             Eigen::AngleAxis<float> (static_cast<float> (x_t (5)), Eigen::Vector3f::UnitZ ())).matrix ();
 
-  //   final_transformation_ = (Eigen::Translation<float, 3> (static_cast<float> (x_t (0)), static_cast<float> (x_t (1)), static_cast<float> (x_t (2))) *
-  //                            Eigen::AngleAxis<float> (static_cast<float> (x_t (3)), Eigen::Vector3f::UnitX ()) *
-  //                            Eigen::AngleAxis<float> (static_cast<float> (x_t (4)), Eigen::Vector3f::UnitY ()) *
-  //                            Eigen::AngleAxis<float> (static_cast<float> (x_t (5)), Eigen::Vector3f::UnitZ ())).matrix ();
+    // New transformed point cloud
+    // Done on final cloud to prevent wasted computation
+    transformPointCloud (*input_, trans_cloud, final_transformation_);
 
-  //   // New transformed point cloud
-  //   // Done on final cloud to prevent wasted computation
-  //   transformPointCloud (*input_, trans_cloud, final_transformation_);
+    // Updates score, gradient. Values stored to prevent wasted computation.
+    score = computeDerivatives (score_gradient, hessian, trans_cloud, x_t, false);
 
-  //   // Updates score, gradient. Values stored to prevent wasted computation.
-  //   score = computeDerivatives (score_gradient, hessian, trans_cloud, x_t, false);
+    // Calculate phi(alpha_t+)
+    phi_t = -score;
+    // Calculate phi'(alpha_t+)
+    d_phi_t = -(score_gradient.dot (step_dir));
 
-  //   // Calculate phi(alpha_t+)
-  //   phi_t = -score;
-  //   // Calculate phi'(alpha_t+)
-  //   d_phi_t = -(score_gradient.dot (step_dir));
+    // Calculate psi(alpha_t+)
+    psi_t = auxiliaryFunction_PsiMT (a_t, phi_t, phi_0, d_phi_0, mu);
+    // Calculate psi'(alpha_t+)
+    d_psi_t = auxiliaryFunction_dPsiMT (d_phi_t, d_phi_0, mu);
 
-  //   // Calculate psi(alpha_t+)
-  //   psi_t = auxiliaryFunction_PsiMT (a_t, phi_t, phi_0, d_phi_0, mu);
-  //   // Calculate psi'(alpha_t+)
-  //   d_psi_t = auxiliaryFunction_dPsiMT (d_phi_t, d_phi_0, mu);
+    // Check if I is now a closed interval
+    if (open_interval && (psi_t <= 0 && d_psi_t >= 0))
+    {
+      open_interval = false;
 
-  //   // Check if I is now a closed interval
-  //   if (open_interval && (psi_t <= 0 && d_psi_t >= 0))
-  //   {
-  //     open_interval = false;
+      // Converts f_l and g_l from psi to phi
+      f_l = f_l + phi_0 - mu * d_phi_0 * a_l;
+      g_l = g_l + mu * d_phi_0;
 
-  //     // Converts f_l and g_l from psi to phi
-  //     f_l = f_l + phi_0 - mu * d_phi_0 * a_l;
-  //     g_l = g_l + mu * d_phi_0;
+      // Converts f_u and g_u from psi to phi
+      f_u = f_u + phi_0 - mu * d_phi_0 * a_u;
+      g_u = g_u + mu * d_phi_0;
+    }
 
-  //     // Converts f_u and g_u from psi to phi
-  //     f_u = f_u + phi_0 - mu * d_phi_0 * a_u;
-  //     g_u = g_u + mu * d_phi_0;
-  //   }
+    if (open_interval)
+    {
+      // Update interval end points using Updating Algorithm [More, Thuente 1994]
+      interval_converged = updateIntervalMT (a_l, f_l, g_l,
+                                             a_u, f_u, g_u,
+                                             a_t, psi_t, d_psi_t);
+    }
+    else
+    {
+      // Update interval end points using Modified Updating Algorithm [More, Thuente 1994]
+      interval_converged = updateIntervalMT (a_l, f_l, g_l,
+                                             a_u, f_u, g_u,
+                                             a_t, phi_t, d_phi_t);
+    }
 
-  //   if (open_interval)
-  //   {
-  //     // Update interval end points using Updating Algorithm [More, Thuente 1994]
-  //     interval_converged = updateIntervalMT (a_l, f_l, g_l,
-  //                                            a_u, f_u, g_u,
-  //                                            a_t, psi_t, d_psi_t);
-  //   }
-  //   else
-  //   {
-  //     // Update interval end points using Modified Updating Algorithm [More, Thuente 1994]
-  //     interval_converged = updateIntervalMT (a_l, f_l, g_l,
-  //                                            a_u, f_u, g_u,
-  //                                            a_t, phi_t, d_phi_t);
-  //   }
-
-  //   step_iterations++;
-  // }
+    step_iterations++;
+  }
 
   // If inner loop was run then hessian needs to be calculated.
   // Hessian is unnecessary for step length determination but gradients are required
@@ -1021,6 +930,7 @@ pclomp::NormalDistributionsTransform<PointSource, PointTarget>::computeStepLengt
 
   return (a_t);
 }
+
 
 template<typename PointSource, typename PointTarget>
 double pclomp::NormalDistributionsTransform<PointSource, PointTarget>::calculateScore(const PointCloudSource & trans_cloud) const
@@ -1069,132 +979,7 @@ double pclomp::NormalDistributionsTransform<PointSource, PointTarget>::calculate
 			score += score_inc / neighborhood.size();
 		}
 	}
-
-  double output_score = 0;
-  if (!trans_cloud.points.empty()) {
-    output_score = (score) / static_cast<double> (trans_cloud.size());
-  }
-	return output_score;
-}
-
-template<typename PointSource, typename PointTarget>
-double pclomp::NormalDistributionsTransform<PointSource, PointTarget>::calculateTransformationProbability(const PointCloudSource & trans_cloud) const
-{
-	double score = 0;
-
-	for (std::size_t idx = 0; idx < trans_cloud.points.size(); idx++)
-	{
-		PointSource x_trans_pt = trans_cloud.points[idx];
-
-		// Find neighbors (Radius search has been experimentally faster than direct neighbor checking.
-		std::vector<TargetGridLeafConstPtr> neighborhood;
-		std::vector<float> distances;
-		switch (search_method) {
-		case KDTREE:
-			target_cells_.radiusSearch(x_trans_pt, resolution_, neighborhood, distances);
-			break;
-		case DIRECT26:
-			target_cells_.getNeighborhoodAtPoint(x_trans_pt, neighborhood);
-			break;
-		default:
-		case DIRECT7:
-			target_cells_.getNeighborhoodAtPoint7(x_trans_pt, neighborhood);
-			break;
-		case DIRECT1:
-			target_cells_.getNeighborhoodAtPoint1(x_trans_pt, neighborhood);
-			break;
-		}
-
-		for (typename std::vector<TargetGridLeafConstPtr>::iterator neighborhood_it = neighborhood.begin(); neighborhood_it != neighborhood.end(); neighborhood_it++)
-		{
-			TargetGridLeafConstPtr cell = *neighborhood_it;
-
-			Eigen::Vector3d x_trans = Eigen::Vector3d(x_trans_pt.x, x_trans_pt.y, x_trans_pt.z);
-
-			// Denorm point, x_k' in Equations 6.12 and 6.13 [Magnusson 2009]
-			x_trans -= cell->getMean();
-			// Uses precomputed covariance for speed.
-			Eigen::Matrix3d c_inv = cell->getInverseCov();
-
-			// e^(-d_2/2 * (x_k - mu_k)^T Sigma_k^-1 (x_k - mu_k)) Equation 6.9 [Magnusson 2009]
-			double e_x_cov_x = exp(-gauss_d2_ * x_trans.dot(c_inv * x_trans) / 2);
-			// Calculate probability of transformed points existence, Equation 6.9 [Magnusson 2009]
-			double score_inc = -gauss_d1_ * e_x_cov_x;
-
-      score += score_inc;
-		}
-	}
-
-  double output_score = 0;
-  if (!trans_cloud.points.empty()) {
-    output_score = (score) / static_cast<double> (trans_cloud.points.size());
-  }
-	return output_score;
-}
-
-template<typename PointSource, typename PointTarget>
-double pclomp::NormalDistributionsTransform<PointSource, PointTarget>::calculateNearestVoxelTransformationLikelihood(const PointCloudSource & trans_cloud) const
-{
-  double nearest_voxel_score = 0;
-  size_t found_neigborhood_voxel_num = 0;
-
-	for (std::size_t idx = 0; idx < trans_cloud.points.size(); idx++)
-	{
-    double nearest_voxel_score_pt = 0;
-		PointSource x_trans_pt = trans_cloud.points[idx];
-
-		// Find neighbors (Radius search has been experimentally faster than direct neighbor checking.
-		std::vector<TargetGridLeafConstPtr> neighborhood;
-		std::vector<float> distances;
-		switch (search_method) {
-		case KDTREE:
-			target_cells_.radiusSearch(x_trans_pt, resolution_, neighborhood, distances);
-			break;
-		case DIRECT26:
-			target_cells_.getNeighborhoodAtPoint(x_trans_pt, neighborhood);
-			break;
-		default:
-		case DIRECT7:
-			target_cells_.getNeighborhoodAtPoint7(x_trans_pt, neighborhood);
-			break;
-		case DIRECT1:
-			target_cells_.getNeighborhoodAtPoint1(x_trans_pt, neighborhood);
-			break;
-		}
-
-		for (typename std::vector<TargetGridLeafConstPtr>::iterator neighborhood_it = neighborhood.begin(); neighborhood_it != neighborhood.end(); neighborhood_it++)
-		{
-			TargetGridLeafConstPtr cell = *neighborhood_it;
-
-			Eigen::Vector3d x_trans = Eigen::Vector3d(x_trans_pt.x, x_trans_pt.y, x_trans_pt.z);
-
-			// Denorm point, x_k' in Equations 6.12 and 6.13 [Magnusson 2009]
-			x_trans -= cell->getMean();
-			// Uses precomputed covariance for speed.
-			Eigen::Matrix3d c_inv = cell->getInverseCov();
-
-			// e^(-d_2/2 * (x_k - mu_k)^T Sigma_k^-1 (x_k - mu_k)) Equation 6.9 [Magnusson 2009]
-			double e_x_cov_x = exp(-gauss_d2_ * x_trans.dot(c_inv * x_trans) / 2);
-			// Calculate probability of transformed points existence, Equation 6.9 [Magnusson 2009]
-			double score_inc = -gauss_d1_ * e_x_cov_x;
-
-      if (score_inc > nearest_voxel_score_pt) {
-        nearest_voxel_score_pt = score_inc;
-      }
-		}
-
-    if (!neighborhood.empty()) {
-      ++found_neigborhood_voxel_num;
-      nearest_voxel_score += nearest_voxel_score_pt;
-    }
-
-	}
-
-  double output_score = 0;
-  if (found_neigborhood_voxel_num != 0) {
-    output_score =  nearest_voxel_score / static_cast<double> (found_neigborhood_voxel_num);
-  }
-  return output_score;
+	return (score) / static_cast<double> (trans_cloud.size());
 }
 
 #endif // PCL_REGISTRATION_NDT_IMPL_H_
