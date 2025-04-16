@@ -41,8 +41,6 @@
 #ifndef PCL_REGISTRATION_NDT_OMP_H_
 #define PCL_REGISTRATION_NDT_OMP_H_
 
-#include "boost/optional.hpp"
-
 #include <pcl/registration/registration.h>
 #include <pcl/search/impl/search.hpp>
 #include "voxel_grid_covariance_omp.h"
@@ -56,27 +54,6 @@ namespace pclomp
 		DIRECT26,
 		DIRECT7,
 		DIRECT1
-	};
-
-	struct NdtResult
-	{
-		Eigen::Matrix4f pose;
-		float transform_probability;
-		float nearest_voxel_transformation_likelihood;
-		int iteration_num;
-		std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>> transformation_array;
-		EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-	};
-
-	struct NdtParams
-	{
-		double trans_epsilon;
-		double step_size;
-		double resolution;
-		int max_iterations;
-		pclomp::NeighborSearchMethod search_method;
-		int num_threads;
-		float regularization_scale_factor;
 	};
 
 	/** \brief A 3D Normal Distribution Transform registration implementation for point cloud data.
@@ -135,15 +112,9 @@ namespace pclomp
 		/** \brief Empty destructor */
 		virtual ~NormalDistributionsTransform() {}
 
-		void setNumThreads(int n)
-		{
-			num_threads_ = n;
-		}
-
-		inline int getNumThreads() const
-		{
-			return num_threads_;
-		}
+    void setNumThreads(int n) {
+      num_threads_ = n;
+    }
 
 		/** \brief Provide a pointer to the input target (e.g., the point cloud that we want to align the input source to).
 		  * \param[in] cloud the input point cloud target
@@ -219,12 +190,6 @@ namespace pclomp
 			search_method = method;
 		}
 
-		inline NeighborSearchMethod
-			getNeighborhoodSearchMethod() const
-		{
-			return search_method;
-		}
-
 		/** \brief Get the registration alignment probability.
 		  * \return transformation probability
 		  */
@@ -234,12 +199,6 @@ namespace pclomp
 			return (trans_probability_);
 		}
 
-		inline double
-			getNearestVoxelTransformationLikelihood() const
-		{
-			return nearest_voxel_transformation_likelihood_;
-		}
-
 		/** \brief Get the number of iterations required to calculate alignment.
 		  * \return final number of iterations
 		  */
@@ -247,20 +206,6 @@ namespace pclomp
 			getFinalNumIteration() const
 		{
 			return (nr_iterations_);
-		}
-
-		/** \brief Return the hessian matrix */
-		inline Eigen::Matrix<double, 6, 6>
-			getHessian() const
-		{
-			return hessian_;
-		}
-
-		/** \brief Return the transformation array */
-		inline const std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>>
-			getFinalTransformationArray() const
-		{
-			return transformation_array_;
 		}
 
 		/** \brief Convert 6 element transformation vector to affine transformation.
@@ -291,59 +236,6 @@ namespace pclomp
 		// negative log likelihood function
 		// lower is better
 		double calculateScore(const PointCloudSource& cloud) const;
-		double calculateTransformationProbability(const PointCloudSource& cloud) const;
-		double calculateNearestVoxelTransformationLikelihood(const PointCloudSource& cloud) const;
-
-		inline void setRegularizationScaleFactor(float regularization_scale_factor)
-		{
-			regularization_scale_factor_ = regularization_scale_factor;
-		}
-
-		inline void setRegularizationPose(Eigen::Matrix4f regularization_pose)
-		{
-			regularization_pose_ = regularization_pose;
-		}
-
-		inline void unsetRegularizationPose()
-		{
-			regularization_pose_ = boost::none;
-		}
-
-		NdtResult getResult()
-		{
-			NdtResult ndt_result;
-			ndt_result.pose = this->getFinalTransformation();
-			ndt_result.transformation_array = getFinalTransformationArray();
-			ndt_result.transform_probability = getTransformationProbability();
-			ndt_result.nearest_voxel_transformation_likelihood =
-				getNearestVoxelTransformationLikelihood();
-			ndt_result.iteration_num = getFinalNumIteration();
-			return ndt_result;
-		}
-
-		void setParams(const NdtParams & ndt_params)
-		{
-			this->setTransformationEpsilon(ndt_params.trans_epsilon);
-			this->setStepSize(ndt_params.step_size);
-			this->setResolution(ndt_params.resolution);
-			this->setMaximumIterations(ndt_params.max_iterations);
-			setRegularizationScaleFactor(ndt_params.regularization_scale_factor);
-			setNeighborhoodSearchMethod(ndt_params.search_method);
-			setNumThreads(ndt_params.num_threads);
-		}
-
-		NdtParams getParams() const
-		{
-			NdtParams ndt_params;
-			ndt_params.trans_epsilon = transformation_epsilon_;
-			ndt_params.step_size = getStepSize();
-			ndt_params.resolution = getResolution();
-			ndt_params.max_iterations = max_iterations_;
-			ndt_params.regularization_scale_factor = regularization_scale_factor_;
-			ndt_params.search_method = getNeighborhoodSearchMethod();
-			ndt_params.num_threads = num_threads_;
-			return ndt_params;
-		}
 
 	protected:
 
@@ -602,14 +494,6 @@ namespace pclomp
   //      Eigen::Matrix<double, 18, 6> point_hessian_;
 
     int num_threads_;
-
-	Eigen::Matrix<double, 6, 6> hessian_;
-	std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>> transformation_array_;
-	double nearest_voxel_transformation_likelihood_;
-
-	float regularization_scale_factor_;
-	boost::optional<Eigen::Matrix4f> regularization_pose_;
-	Eigen::Vector3f regularization_pose_translation_;
 
 	public:
 		NeighborSearchMethod search_method;

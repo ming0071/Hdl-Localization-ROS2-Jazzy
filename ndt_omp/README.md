@@ -1,11 +1,8 @@
 # ndt_omp
+
 This package provides an OpenMP-boosted Normal Distributions Transform (and GICP) algorithm derived from pcl. The NDT algorithm is modified to be SSE-friendly and multi-threaded. It can run up to 10 times faster than its original version in pcl.
 
-# multigrid ndt_omp
-TIER IV has developed an extended version of `ndt_omp` for dynamic map loading functionality.
-The difference from the `ndt_omp` is as follows:
-- Instead of `setInputTarget` interface, `multigrid_ndt_omp` provides `addTarget` and `removeTarget` for more flexible target inputs.
-- Only `RadiusSearch` is supported as a search method (`getNeighborhoodAtPointX` methods are disabled).
+For using this package in non-ROS1 projects (ROS2 or without ROS), see forked repositories: [dfki-ric/pclomp](https://github.com/dfki-ric/pclomp) [tier4/ndt_omp](https://github.com/tier4/ndt_omp).
 
 [![Build](https://github.com/koide3/ndt_omp/actions/workflows/build.yml/badge.svg)](https://github.com/koide3/ndt_omp/actions/workflows/build.yml)
 
@@ -49,7 +46,7 @@ single : 17.2353[msec]
 fitness: 0.208511
 ```
 
-Several methods for neighbor voxel search are implemented. If you select pclomp::KDTREE, results will be completely same as the original pcl::NDT. We recommend to use pclomp::DIRECT7 which is faster and stable. If you need extremely fast registration, choose pclomp::DIRECT1, but it might be a bit unstable.
+Several methods for neighbor voxel search are implemented. If you select pclomp::KDTREE, results will be completely the same as that of the original pcl::NDT. We recommend using pclomp::DIRECT7 which is faster and stable. If you need extremely fast registration, choose pclomp::DIRECT1, but it might be a bit unstable.
 
 <img src="data/screenshot.png" height="400pix" /><br>
 Red: target, Green: source, Blue: aligned
